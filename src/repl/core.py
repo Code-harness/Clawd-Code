@@ -6,6 +6,8 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.styles import Style
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 from rich.markdown import Markdown
 from pathlib import Path
@@ -23,6 +25,7 @@ class ClawdREPL:
     def __init__(self, provider_name: str = "glm"):
         self.console = Console()
         self.provider_name = provider_name
+        self.multiline_mode = False
 
         # Load configuration
         config = get_provider_config(provider_name)
@@ -45,16 +48,25 @@ class ClawdREPL:
             self.provider.model
         )
 
-        # Prompt toolkit
+        # Prompt toolkit with tab completion
         history_file = Path.home() / ".clawd" / "history"
         history_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Command completer
+        commands = ["/help", "/exit", "/quit", "/q", "/clear", "/save", "/load", "/multiline"]
+        self.completer = WordCompleter(commands, ignore_case=True)
+
+        # Key bindings for multiline
+        self.bindings = KeyBindings()
 
         self.prompt_session = PromptSession(
             history=FileHistory(str(history_file)),
             auto_suggest=AutoSuggestFromHistory(),
+            completer=self.completer,
             style=Style.from_dict({
                 'prompt': 'bold blue',
-            })
+            }),
+            key_bindings=self.bindings
         )
 
     def run(self):
@@ -66,9 +78,15 @@ class ClawdREPL:
 
         while True:
             try:
-                user_input = self.prompt_session.prompt('>>> ', multiline=False)
+                # Dynamic prompt based on multiline mode
+                prompt = '... ' if self.multiline_mode else '>>> '
+                user_input = self.prompt_session.prompt(
+                    prompt,
+                    multiline=self.multiline_mode
+                )
 
                 if not user_input.strip():
+                    self.multiline_mode = False
                     continue
 
                 # Handle commands
@@ -78,9 +96,11 @@ class ClawdREPL:
 
                 # Send to LLM
                 self.chat(user_input)
+                self.multiline_mode = False
 
             except KeyboardInterrupt:
                 self.console.print("\n[yellow]Interrupted. Type /exit to quit.[/yellow]")
+                self.multiline_mode = False
                 continue
             except EOFError:
                 self.console.print("\n[blue]Goodbye![/blue]")
@@ -104,8 +124,20 @@ class ClawdREPL:
         elif cmd == '/save':
             self.save_session()
 
+        elif cmd == '/multiline':
+            self.multiline_mode = not self.multiline_mode
+            status = "enabled" if self.multiline_mode else "disabled"
+            self.console.print(f"[green]Multiline mode {status}.[/green]")
+            if self.multiline_mode:
+                self.console.print("[dim]Press Meta+Enter or Esc+Enter to submit.[/dim]")
+
         elif cmd.startswith('/load'):
-            self.console.print("[yellow]Session loading coming soon...[/yellow]")
+            parts = command.strip().split(maxsplit=1)
+            if len(parts) < 2:
+                self.console.print("[red]Usage: /load <session-id>[/red]")
+            else:
+                session_id = parts[1]
+                self.load_session(session_id)
 
         else:
             self.console.print(f"[red]Unknown command: {command}[/red]")
@@ -120,11 +152,14 @@ class ClawdREPL:
 - `/clear` - Clear conversation history
 - `/save` - Save current session
 - `/load <session-id>` - Load a previous session
+- `/multiline` - Toggle multiline input mode
 
 **Usage:**
 - Type your message and press Enter to chat
+- Use Tab for command completion
 - Press Ctrl+C to interrupt current operation
 - Press Ctrl+D to exit
+- Use `/multiline` for multi-paragraph inputs
 """
         self.console.print(Markdown(help_text))
 
@@ -156,3 +191,30 @@ class ClawdREPL:
         """Save current session."""
         self.session.save()
         self.console.print(f"[green]Session saved: {self.session.session_id}[/green]")
+
+    def load_session(self, session_id: str):
+        """Load a previous session.
+
+        Args:
+            session_id: Session ID to load
+        """
+        from src.agent import Session
+
+        loaded_session = Session.load(session_id)
+        if loaded_session is None:
+            self.console.print(f"[red]Session not found: {session_id}[/red]")
+            return
+
+        # Replace current session
+        self.session = loaded_session
+        self.console.print(f"[green]Session loaded: {session_id}[/green]")
+        self.console.print(f"[dim]Provider: {loaded_session.provider}, Model: {loaded_session.model}[/dim]")
+        self.console.print(f"[dim]Messages: {len(loaded_session.conversation.messages)}[/dim]")
+
+        # Show conversation history
+        if loaded_session.conversation.messages:
+            self.console.print("\n[bold]Conversation History:[/bold]")
+            for msg in loaded_session.conversation.messages[-5:]:  # Show last 5 messages
+                role_color = "blue" if msg.role == "user" else "green"
+                self.console.print(f"[{role_color}]{msg.role}[/{role_color}]: {msg.content[:100]}...")
+
