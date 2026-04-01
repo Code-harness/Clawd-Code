@@ -23,13 +23,26 @@
 
 **Clawd Codex** is a **complete Python rewrite** of Claude Code, based on the **real TypeScript source code**.
 
-### Key Points:
+### ⚠️ Important: This is NOT Just Source Code
 
+**Unlike the leaked TypeScript source**, Clawd Codex is a **fully functional, runnable CLI tool**:
+
+<div align="center">
+
+![Clawd Codex CLI in Action](assets/clawd-code-cli.png)
+
+**Real CLI • Real Usage • Real Community**
+
+</div>
+
+- ✅ **Working CLI** — Not just code, but a fully functional command-line tool you can use today
 - ✅ **Based on Real Source** — Ported from actual Claude Code TypeScript implementation
 - ✅ **Maximum Fidelity** — Preserves original architecture while optimizing
 - ✅ **Python Native** — Clean, idiomatic Python with full type hints
 - ✅ **User Friendly** — Easy setup, interactive REPL, comprehensive docs
 - ✅ **Continuously Improved** — Enhanced error handling, testing, documentation
+
+**🚀 Try it now! Fork it, modify it, make it yours! Pull requests welcome!**
 
 ---
 
