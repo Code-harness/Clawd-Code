@@ -183,9 +183,87 @@ class ClawdREPL:
             self.session.conversation.add_message("assistant", response_text)
 
         except Exception as e:
-            self.console.print(f"\n[red]Error: {e}[/red]")
-            import traceback
-            traceback.print_exc()
+            error_str = str(e)
+
+            # Check for authentication errors
+            if "401" in error_str or "authentication" in error_str.lower() or "令牌" in error_str:
+                self.console.print(f"\n[red]❌ Authentication Error: {e}[/red]")
+                self.console.print("\n[yellow]Your API key appears to be invalid or expired.[/yellow]")
+
+                # Ask if user wants to reconfigure
+                from rich.prompt import Prompt
+                choice = Prompt.ask(
+                    "\nWould you like to reconfigure your API key now?",
+                    choices=["y", "n"],
+                    default="y"
+                )
+
+                if choice == "y":
+                    self._handle_relogin()
+                else:
+                    self.console.print("\n[dim]You can run [bold]clawd login[/bold] later to update your API key.[/dim]")
+            else:
+                # Generic error handling
+                self.console.print(f"\n[red]Error: {e}[/red]")
+                import traceback
+                traceback.print_exc()
+
+    def _handle_relogin(self):
+        """Handle re-authentication when API key fails."""
+        from rich.prompt import Prompt
+        from src.config import set_api_key, set_default_provider
+
+        self.console.print("\n[bold blue]🔑 Reconfigure API Key[/bold blue]\n")
+
+        # Select provider
+        provider = Prompt.ask(
+            "Select LLM provider",
+            choices=["anthropic", "openai", "glm"],
+            default=self.provider_name
+        )
+
+        # Input API Key
+        api_key = Prompt.ask(
+            f"Enter {provider.upper()} API Key",
+            password=True
+        )
+
+        if not api_key:
+            self.console.print("\n[red]Error: API Key cannot be empty[/red]")
+            return
+
+        # Optional: Base URL
+        self.console.print(f"\n[dim]Press Enter to keep current, or enter custom base URL[/dim]")
+        base_url = Prompt.ask(
+            f"{provider.upper()} Base URL (optional)",
+            default=""
+        )
+
+        # Save configuration
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+
+        set_api_key(provider, **kwargs)
+        set_default_provider(provider)
+
+        self.console.print(f"\n[green]✓ {provider.upper()} API Key updated successfully![/green]\n")
+
+        # Reinitialize provider
+        from src.config import get_provider_config
+        from src.providers import get_provider_class
+
+        config = get_provider_config(provider)
+        provider_class = get_provider_class(provider)
+
+        self.provider = provider_class(
+            api_key=config["api_key"],
+            base_url=config.get("base_url"),
+            model=config.get("default_model")
+        )
+        self.provider_name = provider
+
+        self.console.print("[green]✓ Provider reinitialized. You can continue chatting![/green]\n")
 
     def save_session(self):
         """Save current session."""
