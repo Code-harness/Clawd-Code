@@ -32,7 +32,7 @@
 
 <div align="center">
 
-!\[Clawd Codex CLI in Action]\(assets/clawd-code-cli.png null)
+![Clawd Codex CLI in Action](assets/clawd-code-cli.png)
 
 **Real CLI • Real Usage • Real Community**
 
