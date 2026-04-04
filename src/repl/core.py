@@ -112,6 +112,9 @@ class ClawdREPL:
         self.tool_registry = build_default_registry()
         self.tool_context = ToolContext(workspace_root=Path.cwd())
         self.tool_context.ask_user = self._ask_user_questions
+        # Permission handler with status control for proper input handling
+        self._current_status = None
+        self.tool_context.permission_handler = self._handle_permission_request
 
         # Prompt toolkit with tab completion
         history_file = Path.home() / ".clawd" / "history"
@@ -129,6 +132,8 @@ class ClawdREPL:
             "/multiline",
             "/tools",
             "/tool",
+            "/skill",
+            "/init",
         ]
         self.completer = WordCompleter(self._get_slash_command_words(), ignore_case=True)
 
@@ -199,6 +204,99 @@ class ClawdREPL:
                 selected = [labels[0]]
             answers[question_text] = ", ".join(selected) if multi else selected[0]
         return answers
+
+    def _handle_permission_request(
+        self,
+        tool_name: str,
+        message: str,
+        suggestion: str | None,
+    ) -> tuple[bool, bool]:
+        """Handle interactive permission requests from tools.
+
+        Args:
+            tool_name: Name of the tool requesting permission.
+            message: Message explaining what permission is needed.
+            suggestion: Optional suggestion for enabling the setting.
+
+        Returns:
+            Tuple of (allowed: bool, continue_without_caching: bool).
+            continue_without_caching is always False since we don't cache in REPL.
+        """
+        # Stop the Rich status spinner if running, so we can get clean input
+        if self._current_status is not None:
+            try:
+                self._current_status.stop()
+            except Exception:
+                pass
+
+        self.console.print("")
+        self.console.print("[bold yellow]⚠ Permission Required[/bold yellow]")
+        self.console.print(f"  {message}")
+        self.console.print("")
+
+        # Determine if this is a setting that can be enabled
+        can_enable_setting = False
+        setting_to_enable: str | None = None
+
+        msg_lower = message.lower()
+        if "allow_docs" in msg_lower or "documentation files" in msg_lower:
+            pc = self.tool_context.permission_context
+            if hasattr(pc, 'allow_docs') and not pc.allow_docs:
+                can_enable_setting = True
+                setting_to_enable = "allow_docs"
+
+        # Build options
+        options: list[tuple[str, str]] = [
+            ("y", "Yes, allow this action"),
+            ("n", "No, deny this action"),
+        ]
+        if can_enable_setting:
+            options.insert(0, ("e", f"Enable {setting_to_enable} and allow"))
+
+        self.console.print("[bold]Options:[/bold]")
+        for i, (key, desc) in enumerate(options, start=1):
+            self.console.print(f"  {i}. [{key}] {desc}")
+        self.console.print("")
+
+        # Get input - use standard input() which works after stopping status
+        choice = input("Select option> ").strip().lower()
+
+        # Parse choice based on the actual displayed options
+        if can_enable_setting:
+            # Menu: 1=Enable, 2=Yes, 3=No
+            if choice in ("1", "e", "enable"):
+                self._enable_permission_setting(setting_to_enable)
+                return True, False
+            elif choice in ("2", "y", "yes", ""):
+                return True, False
+            elif choice in ("3", "n", "no"):
+                return False, False
+        else:
+            # Menu: 1=Yes, 2=No
+            if choice in ("1", "y", "yes", ""):
+                return True, False
+            elif choice in ("2", "n", "no"):
+                return False, False
+
+        # Default to deny for invalid input
+        self.console.print("[dim]Invalid choice, defaulting to deny.[/dim]")
+        return False, False
+
+    def _enable_permission_setting(self, setting_name: str | None) -> None:
+        """Enable a permission setting in the tool context."""
+        if not setting_name:
+            return
+
+        self.console.print(f"\n[dim]Enabling {setting_name}...[/dim]")
+
+        if setting_name == "allow_docs":
+            pc = self.tool_context.permission_context
+            if hasattr(pc, 'allow_docs'):
+                pc.allow_docs = True
+                self.console.print(f"[green]✓ {setting_name} enabled for this session[/green]")
+                return
+
+        self.console.print(f"[dim]Could not enable {setting_name}.[/dim]")
 
     def _get_slash_command_words(self) -> list[str]:
         words = list(self._built_in_commands)
@@ -456,6 +554,12 @@ class ClawdREPL:
                 session_id = parts[1]
                 self.load_session(session_id)
 
+        elif cmd == '/skill':
+            self._handle_skill_command()
+
+        elif cmd == '/init':
+            self._handle_init_command()
+
         else:
             if raw.startswith("/"):
                 if self._try_run_skill_slash(raw):
@@ -531,6 +635,8 @@ class ClawdREPL:
 - `/multiline` - Toggle multiline input mode
 - `/tools` - List available built-in tools
 - `/tool <name> <json>` - Run a tool directly
+- `/skill` - List all available skills
+- `/init` - Create CLAUDE.md file for the project
 
 **Usage:**
 - Type your message and press Enter to chat
@@ -540,6 +646,64 @@ class ClawdREPL:
 - Use `/multiline` for multi-paragraph inputs
 """
         self.console.print(Markdown(help_text))
+
+    def _handle_skill_command(self) -> None:
+        """Handle /skill command - list all available skills."""
+        try:
+            from src.skills.loader import get_all_skills
+
+            cwd = self.tool_context.cwd or self.tool_context.workspace_root
+            skills = list(get_all_skills(project_root=cwd))
+            skills.sort(key=lambda s: s.name.lower())
+
+            if not skills:
+                self.console.print("\n[bold]Available Skills:[/bold]")
+                self.console.print("[dim]No skills found.[/dim]")
+                self.console.print("[dim]Create skills in ~/.clawd/skills/ or ~/.claude/skills/ or .clawd/skills/ in your project.[/dim]")
+                return
+
+            # Group skills by source
+            from collections import defaultdict
+            by_source: dict[str, list] = defaultdict(list)
+            for s in skills:
+                loaded = getattr(s, "loaded_from", "") or "unknown"
+                by_source[loaded].append(s)
+
+            self.console.print(f"\n[bold]Available Skills ({len(skills)}):[/bold]")
+            for source in sorted(by_source.keys()):
+                source_skills = by_source[source]
+                self.console.print(f"\n[cyan]{source.title()} Skills:[/cyan]")
+                for s in source_skills:
+                    desc = (getattr(s, "description", None) or "").strip()
+                    user_invocable = getattr(s, "user_invocable", True)
+                    inv_str = "" if user_invocable else " [dim](not user-invocable)[/dim]"
+                    self.console.print(f"  [green]/{s.name}[/green]{inv_str}")
+                    if desc:
+                        self.console.print(f"    [dim]{desc}[/dim]")
+            self.console.print()
+        except Exception as e:
+            self.console.print(f"[red]Error loading skills: {e}[/red]")
+
+    def _handle_init_command(self) -> None:
+        """Handle /init command - create CLAUDE.md file for the project via LLM analysis."""
+        cwd = self.tool_context.cwd or self.tool_context.workspace_root
+        if cwd is None:
+            self.console.print("[red]Error: Could not determine current working directory.[/red]")
+            return
+
+        init_prompt = f"""Create a CLAUDE.md at {cwd}. Read the key files (README, package.json, pyproject.toml, Makefile, existing CLAUDE.md if any) and write a minimal file.
+
+Include only non-obvious info: special build/test commands, code style rules that differ from defaults, required env vars, gotchas.
+
+Header:
+```
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+```"""
+
+        self.console.print("[dim]Creating CLAUDE.md...[/dim]")
+        self.chat(init_prompt)
 
     def _is_recoverable_tool_error(self, tool_name: str, tool_output) -> bool:
         if not isinstance(tool_name, str):
@@ -596,7 +760,8 @@ class ClawdREPL:
 
             # Use agent loop with tools for any provider that supports it
             from rich.status import Status
-            with self.console.status("[dim]Thinking...[/dim]", spinner="dots"):
+            self._current_status = self.console.status("[dim]Thinking...[/dim]", spinner="dots")
+            with self._current_status:
                 response_text = run_agent_loop(
                     conversation=self.session.conversation,
                     provider=self.provider,
@@ -605,6 +770,7 @@ class ClawdREPL:
                     verbose=False,
                     on_event=on_event,
                 )
+            self._current_status = None
             
             self.console.print(Markdown(response_text))
             self.console.print("\n")

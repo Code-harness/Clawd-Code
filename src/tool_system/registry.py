@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Protocol
 
 from .context import ToolContext
+from .permission_handler import PermissionResult
 from .protocol import ToolCall, ToolResult
 from .schema_validation import validate_json_schema
 
@@ -24,6 +25,20 @@ class Tool(Protocol):
     def spec(self) -> ToolSpec: ...
 
     def run(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult: ...
+
+    def check_permissions(
+        self, tool_input: dict[str, Any], context: ToolContext
+    ) -> PermissionResult:
+        """Check if this tool has permission to run.
+
+        Args:
+            tool_input: The input arguments for the tool.
+            context: The tool execution context.
+
+        Returns:
+            PermissionResult indicating allow, deny, or ask.
+        """
+        return PermissionResult.allow()
 
 
 class ToolRegistry:
@@ -65,6 +80,47 @@ class ToolRegistry:
         spec = tool.spec()
         context.ensure_tool_allowed(spec.name)
         validate_json_schema(call.input, spec.input_schema, root_name=spec.name)
+
+        # Check permissions before running
+        permission_result = tool.check_permissions(call.input, context) if hasattr(tool, 'check_permissions') else PermissionResult.allow()
+        if permission_result.behavior.value == "deny":
+            return ToolResult(
+                name=spec.name,
+                output={"error": permission_result.message or "permission denied"},
+                is_error=True,
+                tool_use_id=call.tool_use_id,
+            )
+        if permission_result.behavior.value == "ask":
+            # Need user interaction
+            if context.permission_handler is None:
+                # No handler available, deny by default
+                return ToolResult(
+                    name=spec.name,
+                    output={"error": permission_result.message or "permission required but no handler available"},
+                    is_error=True,
+                    tool_use_id=call.tool_use_id,
+                )
+            # Call the permission handler
+            allowed, _ = context.permission_handler(
+                spec.name,
+                permission_result.message or f"Tool '{spec.name}' requires permission",
+                permission_result.suggestion,
+            )
+            if not allowed:
+                return ToolResult(
+                    name=spec.name,
+                    output={"error": "permission denied by user"},
+                    is_error=True,
+                    tool_use_id=call.tool_use_id,
+                )
+            # User allowed - proceed with potentially updated input
+            if permission_result.updated_input:
+                call = ToolCall(
+                    name=call.name,
+                    input=permission_result.updated_input,
+                    tool_use_id=call.tool_use_id,
+                )
+
         result = tool.run(call.input, context)
         if result.tool_use_id is None and call.tool_use_id is not None:
             return ToolResult(

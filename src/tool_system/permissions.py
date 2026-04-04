@@ -19,7 +19,7 @@ def _is_within(child: Path, parent: Path) -> bool:
         return False
 
 
-@dataclass(frozen=True)
+@dataclass
 class ToolPermissionContext:
     deny_names: frozenset[str] = field(default_factory=frozenset)
     deny_prefixes: tuple[str, ...] = ()

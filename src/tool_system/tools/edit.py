@@ -5,6 +5,7 @@ from typing import Any
 
 from ..context import ToolContext
 from ..errors import ToolInputError, ToolPermissionError
+from ..permission_handler import PermissionResult
 from ..protocol import ToolResult
 from ..diff_utils import unified_diff_hunks
 from ..registry import ToolSpec
@@ -31,6 +32,26 @@ class FileEditTool:
             strict=True,
         )
 
+    def check_permissions(
+        self, tool_input: dict[str, Any], context: ToolContext
+    ) -> PermissionResult:
+        """Check if edit permission is allowed for this file."""
+        file_path = tool_input.get("file_path")
+        if not isinstance(file_path, str):
+            return PermissionResult.allow()  # Input validation happens in run()
+
+        try:
+            path = context.ensure_allowed_path(file_path)
+        except ToolPermissionError:
+            return PermissionResult.allow()  # Path validation happens in run()
+
+        if path.suffix.lower() in {".md", ".markdown"} and not context.permission_context.allow_docs:
+            return PermissionResult.ask(
+                message="Editing documentation files is blocked unless allow_docs is enabled",
+                suggestion="Enable allow_docs to edit .md files",
+            )
+        return PermissionResult.allow()
+
     def run(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
         file_path = tool_input["file_path"]
         old = tool_input["old_string"]
@@ -43,8 +64,6 @@ class FileEditTool:
             raise ToolInputError("old_string/new_string must be strings")
 
         path = context.ensure_allowed_path(file_path)
-        if path.suffix.lower() in {".md", ".markdown"} and not context.permission_context.allow_docs:
-            raise ToolPermissionError("editing documentation files is blocked unless allow_docs is enabled")
 
         if not path.exists():
             raise ToolInputError(f"file does not exist: {path}")

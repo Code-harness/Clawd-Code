@@ -123,10 +123,14 @@ class TestWriteTool(ToolSystemTests):
         self.assertEqual(p.read_text(encoding="utf-8"), "new")
 
     def test_write_blocks_docs_by_default(self) -> None:
+        """Writing .md files should require permission when allow_docs is False."""
         tool = FileWriteTool()
         p = self.root / "README.md"
-        with self.assertRaises(Exception):
-            tool.run({"file_path": str(p), "content": "x"}, self.ctx)
+        # Permission check should return 'ask' behavior
+        result = tool.check_permissions({"file_path": str(p), "content": "x"}, self.ctx)
+        self.assertEqual(result.behavior.value, "ask")
+        # But run() itself should NOT raise - it just proceeds (permission is checked elsewhere)
+        # Note: run() will still succeed because permission checking moved to check_permissions()
 
 
 class TestEditTool(ToolSystemTests):

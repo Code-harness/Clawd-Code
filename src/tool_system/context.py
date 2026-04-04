@@ -29,6 +29,12 @@ class ToolContext:
     output_style_name: str | None = None
     output_style_dir: Path | None = None
 
+    # Permission handler callback: called when a tool needs user consent.
+    # Signature: (tool_name: str, message: str, suggestion: str | None)
+    #           -> tuple[bool, bool] (allowed: bool, continue_without_caching: bool)
+    # If not set, permission errors will be raised as exceptions.
+    permission_handler: Callable[[str, str, Optional[str]], tuple[bool, bool]] | None = None
+
     def __post_init__(self) -> None:
         self.workspace_root = Path(self.workspace_root).resolve()
         if self.cwd is None:
