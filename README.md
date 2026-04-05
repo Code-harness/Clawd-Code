@@ -24,7 +24,7 @@
 
 ## 🎯 What is This?
 
-**Clawd Code** is a **complete Python rewrite** of Claude Code, based on the **real TypeScript source code**.
+**Clawd Code** is a **complete Python rewrite** of Claude Code, based on the **Real TypeScript source code**.
 
 ### ⚠️ Important: This is NOT Just Source Code
 
